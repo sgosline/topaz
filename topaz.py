@@ -15,12 +15,13 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 __author__='Sara JC Gosline'
 __email__='sgosline@mit.edu'
 
-import pickle,re,os,sys
+import pickle,re,os,sys,random
 import networkx as nx
 from optparse import OptionParser
 import numpy as np
 from collections import defaultdict
 from copy import deepcopy
+from collections import defaultdict
 
 ##need to update this if samnet is installed somewhere else
 #sys.path.append("../SAMNet/src")
@@ -33,10 +34,87 @@ def pairwise(iterable):
     next(b, None)
     return izip(a, b)
 
-def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tfsOfInterest,upRegulatedChromRegions,downRegulatedChromRegions,do_hier=True,delim='.',cutoff=0.5):
+def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,do_hier=True,delim='.',cutoff=0.20):
+    '''
+    Constructs mRNA network from miRNA-mRNA correlation values
+    miRNA-tf edges will be weighted by Target value (not in this node)
+    TF-histone edges will be weighted by anti-correlation with miRNA if greater than cutoff
+    histon-mRNA edges will be weighted by score
+    mRNA-sink edges will be weighted by anti-correlation (act) or correlation (rep) with miRNA
+    '''
+    ##first start with all histone marks, and add in chrom-region-mRNA level of network
+    hmarks=chromRegions.keys()
+    
+    print 'Evaluating '+str(len(hmarks))+' types of epigenetic data with '+str(len(miRs))+' miRNAs'
+    #distinguish TFs by whether or not they are up-regulated of down-regulated
+    upperCaseTargs=defaultdict(dict)
+    for mir in miRs:
+        geneval=miRTargs[mir]
+        for gene in geneval.keys():
+            upperCaseTargs[mir][gene.upper()]=geneval[gene]
+
+
+    ##for each miRNA, get a list of mRNAs that are down-regulated below a specific cutoff
+    down_tfs=defaultdict(list)
+    for m in upperCaseTargs.keys():
+        anticor=[tf.upper() for tf in mirMrnaCorrelations[m].keys() if mirMrnaCorrelations[m][tf]<(-1*cutoff)]
+        newl=[tf for tf in upperCaseTargs[m].keys() if tf in anticor]
+        down_tfs[m]=newl
+        print 'Have TFs and '+str(len(down_tfs[m]))+' anti-correlated with '+m+' for threshold <-'+str(cutoff)
+
+    graph=nx.DiGraph()
+    node_caps={}
+    
+
+    tfsWithBinding=set()
+    #iterate through miRNA commodity for every TF, select proper histone targets
+    for hist in hmarks:
+        #iterate through every combination
+        for matrix,targs in chromGraph.adjacency_inter():
+            if len(targs)==0:
+                continue
+            #first figure out which TFs are in the matrix
+            tfs=[t.upper() for t in matrix.split(delim)]
+            #for each miNRA, weight edge between TF and mRNA by commodity
+            for mir,tftargs in down_tfs.iteritems():
+                for tft in tftargs:
+                    if tft in tfs:
+                        if tft not in graph.nodes():
+                            graph.add_edge('Dummy',tft)
+                        mirTfcor=np.abs(mirMrnaCorrelations[mir][tft])
+                        graph.add_edge(tft,hist+'.'+mir+'.'+matrix,weight=mirTfcor)
+                        tfsWithBinding.add(tft)
+                for targ,eattr in targs,iteritems():
+                    #for every histone target, add in anti-correlated miRNA
+                    weight=eattr['weight']
+                    if weight>0.5 and mirMrnaCorrelations[mir][targ]<(-1*cutoff):
+                        graph.add_edge(hist+'.'+mir+'.'+matrix,targ,weight=weight)
+        print 'Graph has '+str(graph.number_of_nodes())+' nodes and '+str(len(graph.number_of_edges()))+' edges'
+
+    if do_hier:
+        print 'Constructing node-specific capacties'
+        ##Hierarchical capacities more fully mimic the flow model - miRNA-TF edges can handle more flow then TF-mRNA capacities...
+        for node in graph.nodes():
+            treat='Dummy'
+            if node!=treat:
+                spdist=1.0
+                try:
+                    spdist=nx.shortest_path_length(graph,treat,node,None)
+                except nx.exception.NetworkXNoPath:
+                    continue
+                node_cap=np.power(10.0,float(spdist)*-1.0)
+                #print treat,node,str(spdist),str(node_cap)
+                node_caps[treat][node]=node_cap
+    graph.remove_node('Dummy')
+
+    #return network
+    return graph,node_caps
+
+def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tfsOfInterest,upRegulatedChromRegions,downRegulatedChromRegions,do_hier=True,delim='.',cutoff=0.5,draw=False):
                          #top_mirs=15,upstream='',thresh=0.5,do_hier=True, default_node_cap=0.0,use_clip=True,use_cds_clip=False,dr_tfs={},ko_mrnas=[],wt_mrnas=[],ppi_file='',ppi_mapping_file='',hmarks=['H3K4me3','H3K27ac'],largeClusters=True,donorm=False):
     '''
     Assembles miRNAs and TFs and histone data into network to enable running by SAMNet
+    miRVals: list of miRNAs and their fold change.  
     miRTargs: dictionary of dictionary of miRNAs, targets and scores
     upRegulatedGenes: list of up-regulated genes
     downRegulatedGenes: list of down-regulated genes.
@@ -62,6 +140,7 @@ def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tf
     #distinguish miRNAs similarly
     up_mirs=[a for a in miRVals.keys() if miRVals[a]>0]
     down_mirs=[a for a in miRVals.keys() if miRVals[a]<0]
+
     print 'Have '+str(len(up_mirs))+' up-regulated miRs and '+str(len(down_mirs))+' down-regulated'
     #assemble weighted graph
     graph=nx.DiGraph()
@@ -74,16 +153,18 @@ def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tf
         graph.add_edge('Up',m,weight=1.0)###remove this node at end, just a dummy for sp computation
         graph.add_edge('Down',m,weight=1.0)###remove this node at end, just a dummy for sp computation
         for targ in targs:
-            if m in up_mirs and targ.upper() in down_tfs:
-                graph.add_edge(m,targ.upper(),weight=miRTargs[m][targ])#/max_vals)
+            w=float(miRTargs[m][targ])
+            if m in up_mirs and targ.upper() in down_tfs and not np.isnan(w):
+                graph.add_edge(m,targ.upper(),weight=np.abs(w))
                 tfs_in_play.add(targ.upper())
-            elif m in down_mirs and targ.upper() in up_tfs:
-                graph.add_edge(m,targ.upper(),weight=miRTargs[m][targ])#/max_vals)
+            elif m in down_mirs and targ.upper() in up_tfs and not np.isnan(w):
+                graph.add_edge(m,targ.upper(),weight=np.abs(w))
                 tfs_in_play.add(targ.upper())
 #            else:
 #                print 'No edge between '+m+' and '+targ+' because they are not expressed in opposite directions'
 
-    print 'Graph has '+str(len(graph.nodes()))+' nodes and '+str(len(graph.edges()))+' edges from '+str(len(miRTargs))+' miRNAs to '+str(len(tfs_in_play))+' possible TFs'
+    ##if miRNA values are not changing, the network will be empty at this point. So instead 
+    print 'Graph has '+str(len(graph.nodes()))+' nodes and '+str(len(graph.edges()))+' edges from '+str(len(miRTargs))+' possible miRNAs to '+str(len(tfs_in_play))+' possible TFs'
 
     ##then create TF-cond.Tf.histone interactions
     ###first start with Up######################################
@@ -94,15 +175,23 @@ def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tf
         #for every histone create individual node for each matrix
         chromGraph=upRegulatedChromRegions[hist]
         for matrix,targs in chromGraph.adjacency_iter():
+            if len(targs)==0:
+                continue
             #figure out which TFs target this matrix
-            tfs=[t for t in matrix.split(delim) if t in tfs_in_play]
+            #print matrix.split(delim)
+            tfs=[t.upper() for t in matrix.split(delim) if t.upper() in tfs_in_play]
+           # print tfs
             ##add edge from every TF to the matrix
+            has_binding=False
             for a in tfs:
                 weight=np.abs(upperCaseTfs[a])##take absolute value of fold change, relying on miRNAs to filter
 #                print 'Weight from '+a+' to '+matrix+' is :'+str(weight)
                 if weight>0.0:
                     graph.add_edge(a,hist+'.'+cond+'.'+matrix,weight=weight)
+                    has_binding=True
                 tfs_with_binding.add(a)
+            if not has_binding:
+                continue
             #now iterate through every target and add edge from matrix to target
             for targ,eattr in targs.items():
                 weight=eattr['weight']
@@ -115,21 +204,32 @@ def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tf
         #for every histone create individual node for each matrix
         chromGraph=downRegulatedChromRegions[hist]
         for matrix,targs in chromGraph.adjacency_iter():
+            if len(targs)==0:
+                continue
             #figure out which TFs target this matrix
-            tfs=[t for t in matrix.split(delim) if t in tfs_in_play]
+            tfs=[t.upper() for t in matrix.split(delim) if t.upper() in tfs_in_play]
             ##add edge from every TF to the matrix
+            has_binding=False
             for a in tfs:
                 weight=np.abs(upperCaseTfs[a])##take absolute value of fold change, relying on miRNAs to filter
                 if weight>0.0:
                     graph.add_edge(a,hist+'.'+cond+'.'+matrix,weight=weight)
+                    has_binding=True
                 tfs_with_binding.add(a)
             #now iterate through every target and add edge from matrix to target
+            if not has_binding:
+                continue
             for targ,eattr in targs.items():
                 weight=eattr['weight']
                 if weight>cutoff and targ in downRegulatedGenes:
                     graph.add_edge(hist+'.'+cond+'.'+matrix,targ+'mrna',{'weight':weight})                    
         print 'Graph has '+str(len(graph.nodes()))+' and '+str(len(graph.edges()))+' after '+hist+' Down regions and mrnas added'
-    print 'Only '+str(len(tfs_with_binding))+' tfs have binding out of '+str(len(tfs_in_play))+' mRNA above activity threshold'
+    print 'Only '+str(len(tfs_with_binding))+' tfs have binding out of '+str(len(tfs_in_play))+' mRNA above activity threshold, removing extra nodes'
+    for n in tfs_in_play:
+        if n not in tfs_with_binding:
+            graph.remove_node(n)
+
+            
     ##now collect node capacities -- this will be blank if we don't build custom capacities
     node_caps=defaultdict(dict)
     if do_hier:
@@ -152,15 +252,137 @@ def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tf
     if 'Down' in graph.nodes():
         graph.remove_node('Down')
 
+    for n in graph.nodes():
+        if graph.degree(n)==0:
+            print 'removing '+n
+            graph.remove_node(n)
+            
+    #pickle.dump(graph,file=open('graph.pkl','w'))
+    if draw:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        try:
+            from networkx import graphviz_layout
+            #layout=graphviz_layout
+        except ImportError:
+            raise('This example needs Graphvis and either Pygraphvis or Pydot')
+            #layout=nx.spring_layout
+    
+        plt.figure(figsize=(8,8))
+        nodetypes={'mir':'g','tf':'y','hist':'b','mrna':'r'}#]
+        nodecols=[]
+        for node in graph:
+            ntype='hist'
+            if 'mrna' in node:
+                ntype='mrna'
+            if node in tfs_in_play:
+                ntype='tf'
+            elif node in miRVals.keys():
+                ntype='mir'
+            nodecols.append(nodetypes[ntype])#nodetypes.index(ntype))
+        print 'Assigned '+str(len(nodecols))+' node colors'
+        pos=nx.spring_layout(graph)#graphviz_layout(graph,prog='neato')#,prog='dot',args='')
+        nx.draw(graph,pos,node_color=nodecols,alpha=0.4,edge_color='grey',with_labels=False,node_size=25)
+        #nx.draw_networkx_edges(graph, pos,with_labels=False,edge_color='grey',alpha=0.2)
+        #nx.draw_networkx_nodes(graph,pos,node_color=nodecols,alpha=0.5,with_labels=False,node_size=50,label=nodetypes)
+    #not sure what this does
+        xmax=1.02*max(xx for xx,yy in pos.values())
+        ymax=1.02*max(yy for xx,yy in pos.values())
+        plt.xlim(-.02,xmax)
+        plt.ylim(-.02,ymax)
+        try:
+            plt.legend()
+        except Error:
+            print 'error'
+        plt.savefig('mir_tf_histone_graph.png')
+
+        
     return graph,node_caps
 
 
+def perturbNetwork(network,mirlist=[],ishier=True):
+    '''
+    Assume hierarchical network for now. Provide list of input weights to initiate hierarchy
+    '''
 
-def runSamNetWithMirs(network,mrna_weights,mir_weights,gamma,outname,conditions=['Up','Down'],leaveOut='',double=False,node_caps={},debug=False,sinkGamma=False):
+    newnetwork=defaultdict(dict)
+    oldnetwork=nx.to_dict_of_dicts(network)
+    ##collect, for each level, all members of subsequent level
+    tfs,motifs=set(),set()
+
+    #first, collect all weights
+    mirweights=[]
+    for m in mirlist:
+        if m not in oldnetwork.keys():
+            #print 'No %s in network'%(m)
+            continue
+        allweights=[oldnetwork[m][d]['weight'] for d in oldnetwork[m].keys()]
+        tfs.update(oldnetwork[m].keys())
+        mirweights.extend(allweights)
+     #   print 'Have %d edge weights for miRNA %s'%(len(allweights),m)
+    np.random.shuffle(mirweights)
+
+    print mirweights
+    
+    count=0
+    for m in mirlist:
+        if m not in oldnetwork.keys():
+            #print 'No %s in network'%(m)
+            continue
+        for tf in oldnetwork[m].keys():
+            newnetwork[m][tf]={'weight':mirweights[count]}
+            count+=1
+   # print 'Have %d nodes in new network'%(len(newnetwork.keys()))
+            
+    #now onto tfs
+    tfweights=[]
+    for t in tfs:
+        allweights=[oldnetwork[t][d]['weight'] for d in oldnetwork[t].keys()]
+        motifs.update(oldnetwork[t].keys())
+        tfweights.extend(allweights)
+    #    print 'Have %d edge weights for TF %s'%(len(allweights),t)
+        
+    np.random.shuffle(tfweights)
+    count=0
+    for t in tfs:
+        for mot in oldnetwork[t].keys():
+            newnetwork[t][mot]={'weight':tfweights[count]}
+            count+=1
+
+    #print 'Have %d nodes in new network'%(len(newnetwork.keys()))
+
+    #now motifs, then we're done
+    motweights=[]
+    for mo in motifs:
+        allweights=[oldnetwork[mo][d]['weight'] for d in oldnetwork[mo].keys()]
+        motweights.extend(allweights)
+      #  print 'Have %d edge weights for Motif %s'%(len(allweights),mo)
+        
+    np.random.shuffle(motweights)
+    count=0
+    for mo in motifs:
+        for mr in oldnetwork[mo].keys():
+            newnetwork[mo][mr]={'weight':motweights[count]}
+            count+=1
+
+    print 'Have %d nodes in new network'%(len(newnetwork.keys()))
+    
+    return nx.DiGraph(newnetwork)
+
+
+def runSamNetWithMirs(network,mrna_weights,mir_weights,gamma,samnet_path,outname,conditions=['Up','Down'],leaveOut='',double=False,node_caps={},debug=False,sinkGamma=False,numiters=100):
     '''
     runs samnet with mirs in network - by this point mRNA nodes should have 'mrna' appended to their name to prevent direct edges...
     '''
 
+        ##first add samnet to path
+    sys.path.insert(0,samnet_path)
+    sys.path.insert(0,samnet_path+'src')
+    global samnet
+    import samnet  ##call run_samnet command manually
+    
     ##this calls the original SAMNet code - make sure you know where it is!
     flow,phens,prots,tfs,mrnas=samnet.run_rn(PPI_with_weights=network,indirect_weights=mir_weights,direct_weights={},graph_tr=nx.DiGraph(),mrna_weights=mrna_weights,output=outname,updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=debug,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
 
@@ -189,7 +411,7 @@ def runSamNetWithMirs(network,mrna_weights,mir_weights,gamma,outname,conditions=
                 newnetwork=deepcopy(network)
                 newnetwork.remove_node(tfpair[0])
                 newnetwork.remove_node(tfpair[1])                    
-                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr={},mrna_weights=mrna_weights,output=outname+'_'+tfpair[0]+'and'+tfpair[1]+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
+                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr=nx.DiGraph(),mrna_weights=mrna_weights,output=outname+'_'+tfpair[0]+'and'+tfpair[1]+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
                 total_phens=total_phens.union(newphens)
                 total_tfs=total_tfs.union(newtfs)
                 total_mrnas=total_mrnas.union(newmrnas)
@@ -201,7 +423,7 @@ def runSamNetWithMirs(network,mrna_weights,mir_weights,gamma,outname,conditions=
                 #if not os.path.exists(outname+'_'+tf+'_REMOVED'+mul_c+'_ppi_attributes.eda'):
                 newnetwork=deepcopy(network)
                 newnetwork.remove_node(tf)
-                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr={},mrna_weights=mrna_weights,output=outname+'_'+tf+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
+                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr=nx.DiGraph(),mrna_weights=mrna_weights,output=outname+'_'+tf+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
                 total_phens=total_phens.union(newphens)
                 total_tfs=total_tfs.union(newtfs)
                 total_mrnas=total_mrnas.union(newmrnas)
@@ -214,7 +436,7 @@ def runSamNetWithMirs(network,mrna_weights,mir_weights,gamma,outname,conditions=
                 newnetwork=deepcopy(network)
                 newnetwork.remove_node(tfpair[0])
                 newnetwork.remove_node(tfpair[1])
-                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr={},mrna_weights=mrna_weights,output=outname+'_'+tfpair[0]+'and'+tfpair[1]+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
+                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr=nx.DiGraph(),mrna_weights=mrna_weights,output=outname+'_'+tfpair[0]+'and'+tfpair[1]+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
 #                outlist.append(outname+'_'+tfpair[0]+'and'+tfpair[1]+'_REMOVED'+mul_c+'_ppi_attributes.eda')
                 outlist.append(outname+'_'+tfpair[0]+'and'+tfpair[1]+'_REMOVED'+mul_c+'_edge_type.eda')
                 total_phens=total_phens.union(newphens)
@@ -225,14 +447,70 @@ def runSamNetWithMirs(network,mrna_weights,mir_weights,gamma,outname,conditions=
             for mir in phens:
                 newnetwork=deepcopy(network)
                 newnetwork.remove_node(mir)
-                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr={},mrna_weights=mrna_weights,output=outname+'_'+mir+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
+                newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr=nx.DiGraph(),mrna_weights=mrna_weights,output=outname+'_'+mir+'_REMOVED',updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
                 #                outlist.append(outname+'_'+mir+'_REMOVED'+mul_c+'_ppi_attributes.eda')
                 total_phens=total_phens.union(newphens)
                 total_tfs=total_tfs.union(newtfs)
                 total_mrnas=total_mrnas.union(newmrnas)
                 outlist.append(outname+'_'+mir+'_REMOVED'+mul_c+'_edge_type.eda')
                 print newphens
+    elif leaveOut=='RNA': ##here we are not doing leave-out, but randomization of mRNA and miRNA weights
+        #first collect list of all mRNAs
+        allgenes=[m for m in network.nodes() if 'mrna' in m]
+        print '\nPerforming randomization by sampling from %d mRNA over %s iterations\n'%(len(allgenes),numiters)
+        ##now recreate total_phens and total_tfs to dictionaries
+        total_phens,prots,total_tfs=defaultdict(int),defaultdict(int),defaultdict(int)
+        for i in range(int(numiters)):
+            #create new index names for mRNA weights
+            newmrna=defaultdict(dict)
+            for k in mrna_weights.keys():
+                vals=mrna_weights[k].values()
+                numselected=len([a for a in mrnas if a+'mrna' in mrna_weights[k].keys()])
+                print "Found %d mRNA for commodity %s from selection of %d"%(numselected,k,len(mrnas))
+                genes=random.sample(allgenes, numselected)
+                newmrna[k]=dict(zip(genes,vals))
             
+
+            newmirna={}
+            for k in mir_weights.keys():
+                rmirs=mir_weights[k].keys()
+                np.random.shuffle(rmirs)
+                newmirna[k]=dict(zip(rmirs,mir_weights[k].values()))
+
+            newout=outname+'_RANDOM'+str(i)+'_'
+            #run algorithm
+            newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=network,indirect_weights=newmirna,direct_weights={},graph_tr=nx.DiGraph(),mrna_weights=newmrna,output=newout,updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
+            if newflow==0:
+                continue          
+            #keep running tally of miRNAs, mRNAs counted
+            for k in newphens:
+                total_phens[k]+=1
+            for k in newprots:
+                prots[k]+=1
+            for k in newtfs:
+                total_tfs[k]+=1
+            #append to outlist
+            outlist.append(newout+mul_c+'_edge_type.eda')
+    elif leaveOut=='NETWORK':
+         ##now recreate total_phens and total_tfs to dictionaries
+        total_phens,prots,total_tfs=defaultdict(int),defaultdict(int),defaultdict(int)
+        for i in range(int(numiters)):
+            allmirs=set()
+            [allmirs.update(mir_weights[k].keys()) for k in mir_weights.keys()]
+            newnetwork=perturbNetwork(network,[a for a in allmirs])
+            newout=outname+'_RANDOM'+str(i)+'_'
+
+            newflow,newphens,newprots,newtfs,newmrnas=samnet.run_rn(PPI_with_weights=newnetwork,indirect_weights=mir_weights,direct_weights={},graph_tr=nx.DiGraph(),mrna_weights=mrna_weights,output=newout,updateIds='none',cap=1.0,gamma=gamma,solver='cplexamp',noTfs=True,debug=False,treat_weights=dict(),diff_ex_vals=dict(),de_cap='sink',doMCF=True,makeCombined=False,node_caps=node_caps,sinkGamma=sinkGamma)
+            #keep running tally of miRNAs, mRNAs counted
+            for k in newphens:
+                total_phens[k]+=1
+            for k in newprots:
+                prots[k]+=1
+            for k in newtfs:
+                total_tfs[k]+=1
+            #append to outlist
+            outlist.append(newout+mul_c+'_edge_type.eda')
+    
     #now combine outlist files into a single unified sif file
     if len(outlist)>1:
         combined=samnet.combine_single_flows_to_make_multi(outlist[1:],outlist[0],collapse_edges=True,ismcf=True)
@@ -264,15 +542,15 @@ def main():
     parser.add_option('--chromatinRegionNames',dest='exp_names',type='string',help='Comma-delimited list of names of chromatin experiments, e.g. H3K4me3')
 ###########################
     parser.add_option('--gamma',dest='gamma',type='string',help='SAMNet gamma parameter scales number of miRNAs selected')
-    parser.add_option('--doTfKO',dest='do_ko',action='store_true',default=False,help='Do TF knockdown')
+    parser.add_option('--doTfKO',dest='do_ko',action='store_true',default=False,help='Do TF knockdown to identify those TFs that were robust to perturation. If selected with perturb option, will perturb all edges in network.')
+    parser.add_option('--perturb',dest='num_samps',type='string',default=None,help='To assess statistics of miRNA and TF selections, use this option to perturb mRNA and miRNA by providing the number of randomizations to perform. If selected with --doTfKO, will perturb network instead of RNA inputs')
     parser.add_option('--outputPrefix',dest='out',type='string',help='Prefix for output',default='samnet')
     parser.add_option('--path-to-samnet',dest='addpath',type='string',default=os.path.join(progdir,'../SAMnet'),help='To run SAMNet we require path to SAMNet module')
+    parser.add_option('--draw-graph-only',dest='plot_only',default=False,action='store_true',help='Only draw graph, do not run optimization')
+    parser.add_option('--histCutoff',dest='histCutoff',default='0.5',type='string',help='Minimium log fold change required for motif match to be considered')
     opts,args=parser.parse_args()
 
-    ##first add samnet to path
-    sys.path.insert(0,opts.addpath)
-    sys.path.insert(0,opts.addpath+'src')
-    import samnet  ##call run_samnet command manually
+
 
     print '----------------Processing arguments-----------------------'
     #get mRNAs
@@ -289,14 +567,14 @@ def main():
 
     #get miRNAs
     miRs={}
-    mif=open(opts.miRNA_file,'rU')
+    mif=open(opts.miRNA_file,'rU').readlines()
     for row in mif:
         if len(row.strip().split('\t'))!=2:
             print '--miRNAs file needs to be tab-delimited with 2 columns, one for miR one for lfc'
             sys.exit()
         else:
             mir,val=row.strip().split('\t')
-            miRs[mir]=float(val)
+            miRs[mir.strip()]=float(val.strip())
     print 'Read in '+str(len(miRs))+' miRNA values'
 
     #now load in miRNA targets (default to TS once I have new values)
@@ -318,14 +596,15 @@ def main():
 
     #now read in tf data
     tfs={}
-    for row in open(opts.tf_file,'rU').readlines():
+    fn=opts.tf_file
+    for row in open(fn,'rU').readlines():
         if len(row.strip().split('\t'))!=2:
             print '--TFWeights file needs to be tab-delimited with 2 columns, one for TF names, one for log fold change'
         
             sys.exit()
         else:
             m,val=row.strip().split('\t')
-            tfs[m]=float(val)
+            tfs[m.strip()]=float(val.strip())
     print 'Found '+str(len(tfs))+' nodes that could be considered if they have binding sites in chromatin data...'
 
     #finally load up histones into dictionaries
@@ -352,15 +631,18 @@ def main():
     downreg_genes=[a for a in mRNAs.keys() if mRNAs[a]<0]
 
     print '----------------Building Network Graph-----------------------'
-    graph,caps=build_samnet_network(miRs,mirTargs,upreg_genes,downreg_genes,tfs,up_chroms,down_chroms,do_hier=True)
+    graph,caps=build_samnet_network(miRs,mirTargs,upreg_genes,downreg_genes,tfs,up_chroms,down_chroms,do_hier=True,cutoff=float(opts.histCutoff),draw=opts.plot_only)
 
     ##need to split up mRNAs by commodity, add mrna label
     conditions=['Up','Down']
     newWeights={}
     mirWeights={}
+    absmirs={}
+    for mir,val in miRs.iteritems():
+        absmirs[mir]=np.abs(val)
     for c in conditions:
         newWeights[c]={}
-        mirWeights[c]=miRs
+        mirWeights[c]=absmirs
     for m in upreg_genes:
         newWeights['Up'][m+'mrna']=np.abs(mRNAs[m])
     for m in downreg_genes:
@@ -371,9 +653,30 @@ def main():
     #now graph should be built, can actually run samnet!
     if opts.do_ko:
         lo='TF'
+        if opts.num_samps is not None:
+            lo='NETWORK'
+        else:
+            lo=''
     else:
-        lo=''
-    mirs,prots,tfs,mrnas=runSamNetWithMirs(graph,newWeights,mirWeights,opts.gamma,opts.out+'_gamma'+opts.gamma,conditions=conditions,leaveOut=lo,double=False,node_caps=caps,debug=False,sinkGamma=False)
+        if opts.num_samps is not None:
+            lo='RNA'
+        else:
+            lo=''
 
+    if not opts.plot_only:
+        mirs,prots,tfs,mrnas=runSamNetWithMirs(graph,newWeights,mirWeights,opts.gamma,opts.addpath,opts.out+'_gamma'+opts.gamma,conditions=conditions,leaveOut=lo,double=False,node_caps=caps,debug=False,sinkGamma=False,numiters=opts.num_samps)
+
+    ##now collect randomization stats
+    if opts.num_samps is not None:
+        statsfile=open(opts.out+'_gamma'+opts.gamma+opts.num_samps+'_'+lo+'_randomization.xls','w')
+        statsfile.write('Node Type\tNode\tFraction Selected\n')
+        for m in mirs.keys():
+            statsfile.write('miRNA\t%s\t%f\n'%(m,float(mirs[m])/float(opts.num_samps)))
+        for m in prots.keys():
+            statsfile.write('TF\t%s\t%f\n'%(m,float(prots[m])/float(opts.num_samps)))
+      #  for m in tfs.keys():
+      #      statsfile.write('Motifs\t%s\t%f\n'%(m,float(tfs[m])/float(opts.num_samps)))
+            
+        statsfile.close()
 if __name__=='__main__':
     main()
