@@ -34,6 +34,8 @@ def pairwise(iterable):
     next(b, None)
     return izip(a, b)
 
+##all levels of hte graph (from top to bottom)
+all_graph_levels=['mirAbund','mirTarget','TFexpr','motif','mRNA']
 
 def build_samnet_network(miRVals,miRTargs,upRegulatedGenes,downRegulatedGenes,tfsOfInterest,upRegulatedChromRegions,downRegulatedChromRegions,do_hier=True,delim='.',cutoff=0.5,draw=False):
                          #top_mirs=15,upstream='',thresh=0.5,do_hier=True, default_node_cap=0.0,use_clip=True,use_cds_clip=False,dr_tfs={},ko_mrnas=[],wt_mrnas=[],ppi_file='',ppi_mapping_file='',hmarks=['H3K4me3','H3K27ac'],largeClusters=True,donorm=False):
@@ -380,46 +382,111 @@ def runSamNetWithMirs(network,mrna_weights,mir_weights,gamma,samnet_path,outname
     return total_phens,prots,total_tfs,total_mrnas
 
 
-def randomizeGraphAndRun(num_iters,miRs,mirTargs,mirWeights,mrna_weights,upreg_genes,downreg_genes,tfs,up_chroms,down_chroms,cutoff,gamma,addpath,out,conditions,orig_out):
+def randomizeGraphAndRun(num_iters,miRs,mirTargs,mirWeights,mrna_weights,upreg_genes,downreg_genes,tfs,up_chroms,down_chroms,cutoff,gamma,addpath,out,conditions,orig_out,levels=all_graph_levels):
         ##now we can perform randomization if necessary by re-creating entire network
     print '----------------Performing '+str(num_iters)+' randomizations-----------------------'
+    print 'Randomizing the following levels: '+','.join(levels)
     outlist=[]
     mircounts,protcounts,tfcounts,mrnacounts=defaultdict(int),defaultdict(int),defaultdict(int),defaultdict(int)
-    allTargs=tfs.keys()#set()
-    upTargs=[a for a in tfs.keys() if tfs[a]>0]
-    downTargs=[a for a in tfs.keys() if tfs[a]<0]
+    
+    llevels=[a.lower() for a in levels]
+    allTargs=tfs.keys()#set() #keep names of TFs the same
+    
     #[allTargs.update(mirTargs[m].keys()) for m in mirTargs.keys()]
     print 'Have %d miRNA targets to choose from'%(len(allTargs))
     for i in range(num_iters):
-        #shuffle miRNA targets!!!
-        print '---Shuffling miRNA degree and miRNA targets for iteration %d....'%(i)
-        #print mirWeights
-        randomMirTargs={}
-        targlist=deepcopy(mirTargs.values())
-        allmirs=[a for a in mirTargs.keys()]#get all mir indicies
-        for m in allmirs:
-            newvals=targlist.pop(random.choice(range(len(targlist))))
-            randomMirTargs[m]=dict(zip(random.sample(allTargs,len(newvals)),newvals.values()))
-#        random.shuffle(allmirs)#shuffle in place
-#        randomMirTargs=dict(zip(allmirs,mirTargs.values()))#then rezip with same values
-        print '---Shuffling mRNA weights'
-        new_mrna_weights={}
-        for k in mrna_weights.keys():
-            allvals=mrna_weights[k].values()
-            if k in ['up','UP','Up']:
-                upreg_genes=random.sample(upTargs,len(allvals))
-                new_mrna_weights[k]=dict(zip([a+'mrna' for a in upreg_genes],allvals))
-            elif k in ['down','DOWN','Down']:
-                downreg_genes=random.sample(downTargs,len(allvals))
-                new_mrna_weights[k]=dict(zip([a+'mrna' for a in downreg_genes],allvals))
-            else:
-                other_genes=random.sample(allTargs,len(allvals))
-                new_mrna_weights[k]=dict(zip([a+'mrna' for a in other_genes],allvals))
-                upreg_genes=other_genes
-                downreg_genes=other_genes
-                
+        #shuffle miRNA abundances
+        if 'mirabund' in llevels:
+            print '---Shuffling miRNA abundances for iteration %d....'%(i)
+            mirnames=miRs.keys()
+            newabs=miRs.values()
+            random.shuffle(newabs)
+            randabund=dict(zip(mirnames,newabs))
+        else:
+            randabund=miRs
+
+        #shuffle TF expression?
+        if 'tfexpr' in llevels:
+            print '---Shuffling TF expression for iteration %d....'%(i)
+            newvals=tfs.values()
+            np.random.shuffle(newvals)
+            randtfs=dict(zip(allTargs,newvals))
+        else:
+            randtfs=tfs
+            
+        upTargs=[a for a in randtfs.keys() if randtfs[a]>0]
+        downTargs=[a for a in randtfs.keys() if randtfs[a]<0]
+
+
+        #shuffle miRNA targets?
+        if 'mirtarget' in llevels:
+            print '---Shuffling miRNA degree and miRNA targets for iteration %d....'%(i)
+            #print mirWeights
+            randomMirTargs={}
+            targlist=deepcopy(mirTargs.values())
+            allmirs=[a for a in mirTargs.keys()]#get all mir indicies
+            for m in allmirs:
+                newvals=targlist.pop(random.choice(range(len(targlist))))
+                randomMirTargs[m]=dict(zip(random.sample(allTargs,len(newvals)),newvals.values()))
+        else:
+            randomMirTargs=mirTargs
+        
+        #shuffle mRNA expression changes?
+        if 'mrna' in llevels:
+            print '---Shuffling mRNA weights for iteration %d...'%(i)
+            new_mrna_weights={}
+            for k in mrna_weights.keys():
+                allvals=mrna_weights[k].values()
+                ##keep up-regulated targets up-regulated, and down-regulated targets down-regulated
+                if k in ['up','UP','Up']:
+                    upreg_genes=random.sample(upTargs,len(allvals))
+                    new_mrna_weights[k]=dict(zip([a+'mrna' for a in upreg_genes],allvals))
+                elif k in ['down','DOWN','Down']:
+                    downreg_genes=random.sample(downTargs,len(allvals))
+                    new_mrna_weights[k]=dict(zip([a+'mrna' for a in downreg_genes],allvals))
+                else:
+                    other_genes=random.sample(allTargs,len(allvals))
+                    new_mrna_weights[k]=dict(zip([a+'mrna' for a in other_genes],allvals))
+                    upreg_genes=other_genes
+                    downreg_genes=other_genes
+        else:
+            new_mrna_weights=mrna_weights
+            upreg_genes=upTargs
+            downreg_genes=downTargs
+            
+        #shuffle histone-motif events?
+        if 'motif' in llevels:
+            print '---Resampling motif-DNA edges for iteration %d...'%(i)
+            rand_up_chroms,rand_down_chroms={},{}
+            for mark in up_chroms.keys(): #for each mark, create random graph while preserving out-degree?
+                newgraph=nx.DiGraph()##add new graph
+                for matrix,targs in up_chroms[mark].adjacency_iter():
+                    newtargs=random.sample(upTargs,len(targs))
+                    if len(targs)==0:
+                        continue
+                    tcount=0
+                    for targ,eattr in targs.items():
+                        newgraph.add_edge(matrix,newtargs[tcount],weight=eattr['weight'])
+                        tcount+=1
+                rand_up_chroms[mark]=newgraph
+            
+            for mark in down_chroms.keys(): #for each mark, create random graph while preserving out-degree?
+                newgraph=nx.DiGraph()##add new graph
+                for matrix,targs in down_chroms[mark].adjacency_iter():
+                    newtargs=random.sample(downTargs,len(targs))
+                    if len(targs)==0:
+                        continue
+                    tcount=0
+                    for targ,eattr in targs.items():
+                        newgraph.add_edge(matrix,newtargs[tcount],weight=eattr['weight'])
+                        tcount+=1
+                rand_down_chroms[mark]=newgraph
+        else:
+            rand_up_chroms=up_chroms
+            rand_down_chroms=down_chroms
+        
         print 'Building %dth Random Network Graph...'%(i)
-        graph,caps=build_samnet_network(miRs,randomMirTargs,upreg_genes,downreg_genes,tfs,up_chroms,down_chroms,do_hier=True,cutoff=cutoff,draw=False)
+        graph,caps=build_samnet_network(randabund,randomMirTargs,upreg_genes,downreg_genes,randtfs,rand_up_chroms,rand_down_chroms,do_hier=True,cutoff=cutoff,draw=False)
 
 
 #            print new_mrna_weights[k]
@@ -486,6 +553,7 @@ def main():
     parser.add_option('--path-to-samnet',dest='addpath',type='string',default=os.path.join(progdir,'../SAMnet'),help='To run SAMNet we require path to SAMNet module')
     parser.add_option('--draw-graph-only',dest='plot_only',default=False,action='store_true',help='Only draw graph, do not run optimization')
     parser.add_option('--histCutoff',dest='histCutoff',default='0.5',type='string',help='Minimium log fold change required for motif match to be considered')
+    parser.add_option('--levelsToPerturb',dest='levels',default=','.join(all_graph_levels),help='Commma-delimited list of levels of the network, includes all by DEFAULT:%default')
     opts,args=parser.parse_args()
 
 
@@ -599,7 +667,7 @@ def main():
         mirs,prots,newtfs,mrnas=runSamNetWithMirs(graph,newWeights,mirWeights,opts.gamma,opts.addpath,opts.out+'_gamma'+opts.gamma,conditions=conditions,leaveOut=lo,node_caps=caps,debug=False,sinkGamma=False)
 
     if opts.num_samps is not None:
-        othermirs,otherprots,othertfs,othermrnas,totalreps=randomizeGraphAndRun(int(opts.num_samps),miRs=miRs,mirTargs=mirTargs,mirWeights=mirWeights,mrna_weights=newWeights,upreg_genes=upreg_genes,downreg_genes=downreg_genes,tfs=tfs,up_chroms=up_chroms,down_chroms=down_chroms,cutoff=float(opts.histCutoff),gamma=opts.gamma,addpath=opts.addpath,out=opts.out,conditions=conditions,orig_out=opts.out+'_gamma'+opts.gamma+'multiComm')
+        othermirs,otherprots,othertfs,othermrnas,totalreps=randomizeGraphAndRun(int(opts.num_samps),miRs=miRs,mirTargs=mirTargs,mirWeights=mirWeights,mrna_weights=newWeights,upreg_genes=upreg_genes,downreg_genes=downreg_genes,tfs=tfs,up_chroms=up_chroms,down_chroms=down_chroms,cutoff=float(opts.histCutoff),gamma=opts.gamma,addpath=opts.addpath,out=opts.out,conditions=conditions,orig_out=opts.out+'_gamma'+opts.gamma+'multiComm',levels=opts.levels.split(','))
         #now we can compute stats!
         statsfile=open(opts.out+'gamma'+opts.gamma+'_'+opts.num_samps+'_randomization.xls','w')
         statsfile.write('Node Type\tNode\tFraction Selected\n')

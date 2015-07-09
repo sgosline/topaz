@@ -33,7 +33,7 @@ def pairwise(iterable):
     next(b, None)
     return izip(a, b)
 
-def build_mirna_dis_network(miR,disTargs,disMrnaCors,disChromRegions,tfWeights={},do_hier=True,delim='.',cutoff=0.2):
+def build_mirna_dis_network(miR,disTargs,disMrnaCors,disChromRegions,tfWeights={},do_hier=True,delim='.'):
     '''
     Constructs mRNA networks from miRNA_mRNA correlation values across various expression datasets
     to compare the impact of a single miRNA across multiple systems
@@ -71,7 +71,7 @@ def build_mirna_dis_network(miR,disTargs,disMrnaCors,disChromRegions,tfWeights={
     downTfs={}
     for d in upperCaseTargs.keys():
         #first collect list of anti-correlated TFs
-        anticor=[tf for tf in upperCaseCors[d].keys() if upperCaseCors[d][tf]<0]
+        anticor=[tf for tf in upperCaseCors[d].keys()]# if upperCaseCors[d][tf]<0]
         #now filter those TF targets to be sure they are somewhat negatively correlated?
 #        downTfs.update([tf for tf in upperCaseTargs[d].keys() if tf in anticor])
         newl=[tf for tf in upperCaseTargs[d].keys() if tf in anticor]
@@ -138,7 +138,7 @@ def build_mirna_dis_network(miR,disTargs,disMrnaCors,disChromRegions,tfWeights={
     #return network
     return graph,node_caps    
 
-def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,tfWeights={},do_hier=True,delim='.',cutoff=0.20):
+def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,tfWeights={},do_hier=True,delim='.'):
     '''
     Constructs mRNA network from miRNA-mRNA correlation values in a single disease/systems
     miRNA-tf edges will be weighted by Target value (not in this function)
@@ -152,26 +152,26 @@ def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,tfWei
     print 'Evaluating '+str(len(hmarks))+' types of epigenetic data with '+str(len(miRs))+' miRNAs'
     #distinguish TFs by whether or not they are up-regulated of down-regulated
     upperCaseTargs=defaultdict(dict)
+    targ_tfs=set()
     for mir in miRs:
         geneval=miRTargs[mir]
         for gene in geneval.keys():
             upperCaseTargs[mir][gene.upper()]=geneval[gene]
+            targ_tfs.add(gene.upper())
+        print 'Have '+str(len(geneval))+' mrnas targeted by miRNA '+mir
+    ##for each miRNA, get a list of mRNAs that are targets in some shape or form
 
-
-    ##for each miRNA, get a list of mRNAs that are down-regulated below a specific cutoff
-    down_tfs=set()
-
-
+    
+  
     graph=nx.DiGraph()
     node_caps=defaultdict(dict)
-    for m in upperCaseTargs.keys():
-        anticor=[tf.upper() for tf in mirMrnaCorrelations[m].keys() if mirMrnaCorrelations[m][tf]<(-1*cutoff)]
-        newl=[tf for tf in upperCaseTargs[m].keys() if tf in anticor]
-        down_tfs.update(newl)
-        print 'Have '+str(len(newl))+' TFs anti-correlated with miR '+m+' for threshold <-'+str(cutoff)
+    #for m in upperCaseTargs.keys():
+    #    anticor=[tf.upper() for tf in mirMrnaCorrelations[m].keys()]# if mirMrnaCorrelations[m][tf]<0]
+    #    newl=[tf for tf in upperCaseTargs[m].keys() if tf in anticor]
+    #    targ_tfs.update(newl)
+   
     #print 'Total of '+str(len(down_tfs))+' tfs:'+','.join(down_tfs)
     
-
     tfsWithBinding=set()
     #iterate through miRNA commodity for every TF, select proper histone targets
     for hist in hmarks:
@@ -181,7 +181,7 @@ def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,tfWei
             if len(targs)==0:
                 continue
             #first figure out which TFs are in the matrix
-            tfs=[t.upper() for t in matrix.split(delim) if t in down_tfs]
+            tfs=[t.upper() for t in matrix.split(delim) if t in targ_tfs]
             if len(tfs)==0:
                 continue
             #print 'evaluating matrix: '+matrix+' with tfs '+','.join(tfs)
@@ -189,13 +189,20 @@ def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,tfWei
             for tft in tfs:
                 if tft not in graph.nodes():
                     graph.add_edge('Dummy',tft)
-                if tft not in tfWeights.keys():
+                if tft not in tfWeights.keys() and matrix not in tfWeights.keys():
                     if len(tfWeights)==0:
                         tfw=1.0
                     else:
                         tfw=np.mean(tfWeights.values())
                 else:
-                    tfw=tfWeights[tft]
+                    if matrix in tfWeights.keys():
+                        tfw=tfWeights[matrix]/np.mean(tfWeights.values())
+#                        print 'Matrix '+matrix+' weight: %f'%(tfw)
+                    elif tft in tfWeights.keys():
+                        tfw=tfWeights[tft]/np.mean(tfWeights.values())
+#                        print 'Matrix '+matrix+' not in tfweights!'
+#                        print 'TF '+tft+' weight: %f'%(tfw)
+
                 graph.add_edge(tft,hist+'.'+matrix,weight=tfw)
                 tfsWithBinding.add(tft)
             for targ,eattr in targs.iteritems():
@@ -208,9 +215,9 @@ def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,tfWei
 #                    mtarg=re.sub('mrna','',targ)
  #                   if mtarg in mirMrnaCorrelations[mir].keys() and mirMrnaCorrelations[mir][mtarg]<(-1*cutoff):
                 graph.add_edge(hist+'.'+matrix,targ,weight=weight)
-        print 'Graph has '+str(graph.number_of_nodes())+' nodes and '+str(graph.number_of_edges())+' edges for '+str(len(tfsWithBinding))+' tfs with binding out of '+str(len(down_tfs))+' down-regulated TFs'
+        print 'Graph has '+str(graph.number_of_nodes())+' nodes and '+str(graph.number_of_edges())+' edges for '+str(len(tfsWithBinding))+' tfs with binding out of '+str(len(targ_tfs))+' miRNA-targeted TFs'
 
-    print 'Total selected tfs: '+','.join(tfsWithBinding)
+    print 'Total possible tfs: '+','.join(tfsWithBinding)
     if do_hier:
         print 'Constructing node-specific capacties'
         ##Hierarchical capacities more fully mimic the flow model - miRNA-TF edges can handle more flow then TF-mRNA capacities...
@@ -226,23 +233,24 @@ def build_mirna_cor_network(miRs,miRTargs,mirMrnaCorrelations,chromRegions,tfWei
                 #print treat,node,str(spdist),str(node_cap)
                 for m in mirMrnaCorrelations.keys():
                     node_caps[m][node]=node_cap
-    graph.remove_node('Dummy')
+    if len(tfsWithBinding)>0:
+        graph.remove_node('Dummy')
 
     #return network
     return graph,node_caps
 
 
-def randomizeMetaGraphAndRun(num_iters,miRs,targScores,corScores,tfWeights,chroms,cutoff,gamma,addpath,out,conditions,orig_out):
+def randomizeMetaGraphAndRun(num_iters,miRs,targScores,corScores,tfWeights,chroms,cutoff,gamma,addpath,out,conditions,orig_out,restrictTfs=False):
 
 
         ##now we can perform randomization if necessary by re-creating entire network
     print '----------------Performing '+str(num_iters)+' randomizations-----------------------'
     outlist=[]
     mircounts,protcounts,tfcounts,mrnacounts=defaultdict(int),defaultdict(int),defaultdict(int),defaultdict(int)
-    allTargs=tfWeights.keys()#set()
-    if len(allTargs)==0:
-        allTargs=set()
-        [allTargs.update(targScores[k].keys()) for k in targScores.keys()]
+    #allTargs=tfWeights.keys()#set()
+    #if len(allTargs)==0:
+    allTargs=set()
+    [allTargs.update(targScores[k].keys()) for k in targScores.keys()]
     allGenes=set()
     [allGenes.update(corScores[k].keys()) for k in corScores.keys()]
     
@@ -262,10 +270,11 @@ def randomizeMetaGraphAndRun(num_iters,miRs,targScores,corScores,tfWeights,chrom
 
         print 'Building %dth Random Network Graph...'%(i)
         if len(miRs)==1:
-            graph,caps=build_mirna_dis_network(miRs[0],randomMirTargs,corScores,chroms,do_hier=True,cutoff=cutoff)
+            graph,caps=build_mirna_dis_network(miRs[0],randomMirTargs,corScores,chroms,tfWeights,do_hier=True)
         else:
-            graph,caps=build_mirna_cor_network(miRs,randomMirTargs,corScores,chroms,do_hier=True,cutoff=cutoff)
-
+            graph,caps=build_mirna_cor_network(miRs,randomMirTargs,corScores,chroms,tfWeights,do_hier=True)
+      #      if nx.number_of_nodes(graph)==0:
+                
         ##first do some fixing of the correlation socres, again
         ##need to split up mRNAs by commodity, add mrna label
         ##also use this oppurtunity to shuffle mRNA scores
@@ -281,7 +290,30 @@ def randomizeMetaGraphAndRun(num_iters,miRs,targScores,corScores,tfWeights,chrom
 
             allmrnas.update(newmrnas)
             newcors[mir]=dict(zip(newmrnas,allvals))
+
+        ##now update targScores dictionary to address anti-correlation issue, if we're doing that
+        newTargScores=deepcopy(targScores)
+        alltargs=set()
+        for key,val in newTargScores.iteritems():
+            for k2 in val.keys():
+                v2=val[k2]
+                if restrictTfs:
+                    try:
+                        ac=corScores[key][k2]
+                        #print 'Correlation for miRNA %s and TF %s is %f'%(key,k2,ac)
+                    except:
+                        ac=1
+                    if ac<(-1*cutoff):
+                        newTargScores[key][k2]=np.abs(v2)
+                        alltargs.add(k2)
+                    else:
+                        del newTargScores[key][k2]
+                else:
+                    newTargScores[key][k2]=np.abs(v2)
+                    alltargs.add(k2)
     
+
+        ##then remove any nodes in graph not in target or mrna set
 
         print '----------------Running SAMNet: '+str(i)+'-----------------------'
         #now graph should be built, can actually run samnet!
@@ -316,7 +348,7 @@ def randomizeMetaGraphAndRun(num_iters,miRs,targScores,corScores,tfWeights,chrom
     return mircounts,protcounts,tfcounts,mrnacounts,len(outlist)
 
 #def run_meta_topaz(miRNAs,mirTargs,mirMrnaCor,chroms,gamma,path_to_samnet,outfile,tfWeights={},do_hier=False,do_ko=False,cutoff=0.25):
-def run_meta_topaz(miRNAs,targScores,corScores,chroms,gamma,path_to_samnet,outfile,tfWeights={},do_hier=False,do_ko=False,cutoff=0.25,numiters=None):
+def run_meta_topaz(miRNAs,targScores,corScores,chroms,gamma,path_to_samnet,outfile,tfWeights={},do_hier=False,do_ko=False,cutoff=0.25,numiters=None,restrictTfs=True):
     
     ##need to split up mRNAs by commodity, add mrna label
     newcors=defaultdict(dict)
@@ -333,22 +365,11 @@ def run_meta_topaz(miRNAs,targScores,corScores,chroms,gamma,path_to_samnet,outfi
     
     print '----------------Building Network Graph-----------------------'
     if len(miRNAs)==1:#we are building pan-disease network
-        graph,caps=build_mirna_dis_network(miRNAs[0],targScores,corScores,chroms,do_hier=True,cutoff=cutoff)
+        graph,caps=build_mirna_dis_network(miRNAs[0],targScores,corScores,chroms,tfWeights,do_hier=True)
     else:
-        graph,caps=build_mirna_cor_network(miRNAs,targScores,corScores,chroms,do_hier=True,cutoff=cutoff)
+        graph,caps=build_mirna_cor_network(miRNAs,targScores,corScores,chroms,tfWeights,do_hier=True)
 
 
-    if numiters is None:
-        #because randomization selects from nodes in network, this will bias things
-        #speedup is not that needed?
-        print 'Pruning graph to remove spurious chromatin-mrna edges from '+str(graph.number_of_nodes())+' nodes and '+str(graph.number_of_edges())
-    
-        #now try to prune graph
-        for n in graph.nodes():
-            if 'mrna' in n and n not in allmrnas:
-                graph.remove_node(n)
-        print 'To '+str(graph.number_of_nodes())+' nodes and '+str(graph.number_of_edges())
-            
 
     print '----------------Running SAMNet-----------------------'
     #now graph should be built, can actually run samnet!
@@ -363,11 +384,42 @@ def run_meta_topaz(miRNAs,targScores,corScores,chroms,gamma,path_to_samnet,outfi
             lo=''
    # print lo
     newTargScores=deepcopy(targScores)
+    alltargs=set()
     for key,val in newTargScores.iteritems():
-        for k2,v2 in val.iteritems():
-            newTargScores[key][k2]=np.abs(v2)
+        for k2 in val.keys():
+            v2=val[k2]
+            if restrictTfs:
+                try:
+                    ac=corScores[key][k2]
+                    #print 'Correlation for miRNA %s and TF %s is %f'%(key,k2,ac)
+                except:
+                    ac=1
+                if ac<(-1*cutoff):
+                    newTargScores[key][k2]=np.abs(v2)
+                    alltargs.add(k2)
+                else:
+                    del newTargScores[key][k2]
+            else:
+                newTargScores[key][k2]=np.abs(v2)
+                alltargs.add(k2)
+
+    ##now do pruning speedup
+    redgraph=deepcopy(graph)
+    if numiters is None:
+        print 'Pruning graph to remove spurious chromatin-mrna edges from '+str(graph.number_of_nodes())+' nodes and '+str(graph.number_of_edges())
+        #now try to prune graph
+        for n in redgraph.nodes():
+            if 'mrna' in n and n not in allmrnas:
+                redgraph.remove_node(n)
+            elif n not in alltargs and len(redgraph.predecessors(n))==0:
+                redgraph.remove_node(n)
+        print 'To '+str(redgraph.number_of_nodes())+' nodes and '+str(redgraph.number_of_edges())
+            
+                
+    ##now remove non-targets from graph to simplify
+    
     #this will create a standard run of SAMNet
-    mirs,prots,newtfs,mrnas=topaz.runSamNetWithMirs(network=graph,mir_weights=newTargScores,mrna_weights=newcors,gamma=gamma,outname=outfile+'_gamma'+gamma,conditions=targScores.keys(),samnet_path=path_to_samnet,leaveOut=lo,node_caps=caps,debug=False,sinkGamma=False)
+    mirs,prots,newtfs,mrnas=topaz.runSamNetWithMirs(network=redgraph,mir_weights=newTargScores,mrna_weights=newcors,gamma=gamma,outname=outfile+'_gamma'+gamma,conditions=targScores.keys(),samnet_path=path_to_samnet,leaveOut=lo,node_caps=caps,debug=False,sinkGamma=False)
     
     orig_out=outfile+'_gammamultiComm'
     
