@@ -1,7 +1,8 @@
 '''
-metaTopaz.py module of the topaz mackage
+multiMirTopaz.py module of the topaz mackage
 Assembles  transcriptional data from garnet and gene expression data into one single network
-to identify putative transcriptional regulations using correlation data
+to identify putative transcriptional regulations using correlation data. Designed to model
+changes in multiple miRNAs across a single condition when miRNA abundances changes are unknown.
 
 Requires SAMNet to run network algorithm and GARNET to process epigenetic data
 
