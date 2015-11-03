@@ -1,3 +1,4 @@
+=====
 TOPAZ: Identifying transcriptional regulators from changing microRNA and  mRNA levels.
 =====
 Contact: Sara JC Gosline sgosline@mit.edu
@@ -23,12 +24,13 @@ H THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 =====
 To use:
+________
 
-1 - Download SAMNet [from here](http://www.github.com/sgosline/SAMNet) and Garnet
+1. Download SAMNet [from here](http://www.github.com/sgosline/SAMNet) and Garnet
 from [OmicsIntegrator package](http://www.github.com/sgosline/OmicsIntegrator)
-2 - Use GARNet to create transcriptional regulatory networks from BED-formatted
+2. Use GARNet to create transcriptional regulatory networks from BED-formatted
 files of histone or other chromatin accessibility data
-3 - Collect the required files for topaz (type `topaz.py --h` for file
+3. Collect the required files for topaz (type `topaz.py --h` for file
 descriptions)
-4 - Make sure you have optimization code (ampl) required for SAMNet
-5 - Run!
+4. Make sure you have optimization code (ampl) required for SAMNet
+5. Run!
